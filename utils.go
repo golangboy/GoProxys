@@ -1,8 +1,13 @@
 package GoProxys
 
 import (
+	"fmt"
+	"github.com/spf13/cast"
 	"io"
+	"io/ioutil"
 	"net"
+	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -48,4 +53,15 @@ func newUdp() *net.UDPConn {
 	a, _ := net.ResolveUDPAddr("udp", ":")
 	c, _ := net.ListenUDP("udp", a)
 	return c
+}
+
+func GetSocketsNum() int {
+	z := exec.Command(`netstat`, "-ano")
+	m, _ := z.StdoutPipe()
+	z.Start()
+	bbs, _ := ioutil.ReadAll(m)
+	ret := string(bbs)
+	fmt.Println("pid", os.Getpid())
+	sps := strings.Split(ret, cast.ToString(os.Getpid()))
+	return len(sps)
 }

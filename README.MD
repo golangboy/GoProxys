@@ -8,7 +8,10 @@
 
 - Http
 - Https
-- Socket5(TCP)
+- Socket5(TCP + UDP)
+
+#Tips
+> Sockets-UDP only support IPV4 , so you need set the flag of resolve domain local when using the proxy sofaware. 
 
 ## Demo
 

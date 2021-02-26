@@ -20,9 +20,9 @@ const (
 )
 
 var defaultSocket5Config = &ProxyConfig{
-	TimeOut:   time.Second * 60 * 10,
-	SSTimeOut: time.Millisecond * 200,
-	LogFile:   "socket5.log",
+	TimeOut:    time.Second * 30,
+	UDPTimeOut: time.Second * 3,
+	LogFile:    "socket5.log",
 }
 
 func DefaultSocket5() *Socket5Proxy {
@@ -32,10 +32,14 @@ func DefaultSocket5() *Socket5Proxy {
 }
 
 type Socket5Proxy struct {
-	Config  *ProxyConfig
-	t       *net.TCPListener
-	logFile *os.File
-	logger  *logrus.Logger
+	Config         *ProxyConfig
+	tcpProxyServer *net.TCPListener
+	logFile        *os.File
+	logger         *logrus.Logger
+	client2SS      map[string]*shadowSocket //UDP
+	m              sync.Mutex
+
+	udpProxyServer *net.UDPConn
 }
 
 func (h *Socket5Proxy) RunSocket5Proxy(addr *net.TCPAddr) {
@@ -54,16 +58,35 @@ func (h *Socket5Proxy) RunSocket5Proxy(addr *net.TCPAddr) {
 
 	h.logger.SetReportCaller(true)
 	h.logger.Infoln("Start")
-	h.t = t
+	h.tcpProxyServer = t
 	h.handleSocketListener()
 }
 func (h *Socket5Proxy) Close() {
 	h.logger.Infoln("Stop")
+
+	//Close Udp showdown socket
+	h.m.Lock()
+	for _, v := range h.client2SS {
+		v.close()
+	}
+	h.client2SS = nil
+	h.m.Unlock()
+
+	//Close Udp proxy socket
+
+	h.udpProxyServer.Close()
+
 	if h.logFile != nil {
 		_ = h.logFile.Close()
 	}
-	_ = h.t.Close()
-	h.logger.Exit(0)
+
+	//Close Tcp
+	_ = h.tcpProxyServer.Close()
+
+	//Close Log File
+	h.logFile.Close()
+
+	h.logger = nil
 }
 
 type dataHelp struct {
@@ -122,40 +145,39 @@ func (r *shadowSocket) translateClient() {
 
 func (h *Socket5Proxy) udpTranslate(udpProxy *net.UDPConn) {
 	var buff [1500]byte
-	//var client2Server = make(map[string]*net.UDPConn)
-	var client2SS = make(map[string]*shadowSocket)
-	//var timeOut = make(map[*net.UDPConn]time.Time)
-	var m sync.Mutex
+	h.client2SS = make(map[string]*shadowSocket)
+
+	//Debug Watch
 	go func() {
 		for {
-			m.Lock()
-			//for k, v := range timeOut {
-			//	if time.Now().Sub(v).Seconds() >= 2 {
-			//		k.Close()
-			//		delete(timeOut, k)
-			//	}
-			//}
-			//fmt.Println("key_nums", len(client2Server))
-			for k, v := range client2SS {
+			var closed bool
+			h.m.Lock()
+			for k, v := range h.client2SS {
 				if v.AvailTime.Before(time.Now()) {
 					v.close()
-					delete(client2SS, k)
+					delete(h.client2SS, k)
 				}
 			}
-			m.Unlock()
-			time.Sleep(time.Second * 3)
+			closed = h.client2SS == nil
+			h.m.Unlock()
+			if closed {
+				break
+			}
+			time.Sleep(h.Config.UDPTimeOut)
 		}
 	}()
 
 	for {
 		reqLe, ClientAddr, err := udpProxy.ReadFromUDP(buff[:])
+		if err != nil {
+			break
+		}
 		go func(clientAddr *net.UDPAddr, recvLen int, b [1500]byte) {
 			var host string
 			var port string
 			if err != nil || recvLen < 10 {
 				h.logger.WithField("Raw", b[:reqLe]).Warningln("Udp request")
 			}
-			//clientData := b[10:recvLen]
 			host, port = h.resolveHostPort(b[:recvLen], reqLe)
 			targetServer, err := net.ResolveUDPAddr("udp4", host+":"+port)
 			if err != nil {
@@ -164,11 +186,9 @@ func (h *Socket5Proxy) udpTranslate(udpProxy *net.UDPConn) {
 			hashKey := clientAddr.String() + targetServer.String()
 
 			//Reuse or create a ShadowSocket
-			//var shadowSocket *net.UDPConn
 			var ss *shadowSocket
-			m.Lock()
-			if client2SS[hashKey] == nil {
-
+			h.m.Lock()
+			if h.client2SS[hashKey] == nil {
 				newSS := shadowSocket{
 					HeaderLen:    0,
 					TargetServer: *targetServer,
@@ -177,47 +197,17 @@ func (h *Socket5Proxy) udpTranslate(udpProxy *net.UDPConn) {
 					DataChan:     make(chan dataHelp),
 					ProxySocket:  udpProxy,
 				}
-				client2SS[hashKey] = &newSS
+				h.client2SS[hashKey] = &newSS
 				go newSS.translateClient()
 				go newSS.translateServer()
-				//var newSSChan = make(chan SSData)
-				//client2Chan[hashKey] = newSSChan
-				//client2Server[hashKey] = shadowSocket
-				//
-				//go func(ss *net.UDPConn, dataChan chan SSData) {
-				//	for {
-				//		tmp := <-dataChan
-				//		clientData := tmp.buff[10:tmp.len]
-				//		ss.WriteToUDP(clientData, &tmp.targetServer)
-				//
-				//	}
-				//}(shadowSocket, newSSChan)
 			}
-			ss = client2SS[hashKey]
-			m.Unlock()
+			ss = h.client2SS[hashKey]
+			h.m.Unlock()
 
 			ss.DataChan <- dataHelp{
 				Data:    b,
 				DataLen: recvLen,
 			}
-
-			//n, err = shadowSocket.WriteToUDP(clientData, targetServer)
-
-			//Send client data to target server
-			//go func(ss *net.UDPConn, bb [1500]byte) {
-			//	//Maybe this target server not send data to the ss again,so need a time
-			//	var tmp [1500]byte
-			//	ss.SetDeadline(time.Now().Add(h.Config.SSTimeOut))
-			//	ss.SetReadDeadline(time.Now().Add(h.Config.SSTimeOut))
-			//	n, err = ss.Read(tmp[:])
-			//	udpProxy.WriteToUDP(append(bb[:10], tmp[:n]...), ClientAddr)
-			//	if err != nil {
-			//		m.Lock()
-			//		delete(client2Server, ClientAddr.String())
-			//		m.Unlock()
-			//		shadowSocket.Close()
-			//	}
-			//}(shadowSocket, b)
 
 		}(ClientAddr, reqLe, buff)
 	}
@@ -251,15 +241,16 @@ func (h *Socket5Proxy) resolveHostPort(b []byte, n int) (string, string) {
 
 func (h *Socket5Proxy) handleSocketListener() {
 	//
-	udpProxyServer := newUdp()
-	_, localUdpPort, _ := net.SplitHostPort(udpProxyServer.LocalAddr().String())
+	h.udpProxyServer = newUdp()
+	_, localUdpPort, _ := net.SplitHostPort(h.udpProxyServer.LocalAddr().String())
 	shortPort := uint16(cast.ToInt16(localUdpPort))
-	go h.udpTranslate(udpProxyServer)
+	go h.udpTranslate(h.udpProxyServer)
 
 	for {
-		client, err := h.t.Accept()
+		client, err := h.tcpProxyServer.Accept()
 		if err != nil {
-			panic(err)
+			h.tcpProxyServer.Close()
+			return
 		}
 		go func(conn net.Conn) {
 			var b [10240]byte
