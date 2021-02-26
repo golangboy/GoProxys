@@ -2,6 +2,7 @@ package GoProxys
 
 import (
 	"io"
+	"net"
 	"strings"
 )
 
@@ -41,4 +42,10 @@ func getHttpValue(s string) string {
 		return ""
 	}
 	return r[1]
+}
+
+func newUdp() *net.UDPConn {
+	a, _ := net.ResolveUDPAddr("udp", ":")
+	c, _ := net.ListenUDP("udp", a)
+	return c
 }
