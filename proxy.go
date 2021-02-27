@@ -3,8 +3,8 @@ package GoProxys
 import "time"
 
 type ProxyConfig struct {
-	TimeOut       time.Duration
-	UDPTimeOut    time.Duration //UDP Shadown Socket Recv TimeOut
+	TCPTimeOut    time.Duration
+	UDPTimeOut    time.Duration //UDP Shadown Socket Recv TCPTimeOut
 	LogFile       string
 	EnableLogFile bool
 }

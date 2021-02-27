@@ -8,7 +8,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
+	"time"
 )
 
 func readStringUntil(reader io.Reader, token string) (string, bool) {
@@ -56,12 +58,26 @@ func newUdp() *net.UDPConn {
 }
 
 func GetSocketsNum() int {
-	z := exec.Command(`netstat`, "-ano")
+	var args string
+	if runtime.GOOS == "windows" {
+		args = "-ano"
+	} else {
+		args = "-anp"
+	}
+	z := exec.Command(`netstat`, args)
 	m, _ := z.StdoutPipe()
 	z.Start()
 	bbs, _ := ioutil.ReadAll(m)
 	ret := string(bbs)
-	fmt.Println("pid", os.Getpid())
 	sps := strings.Split(ret, cast.ToString(os.Getpid()))
-	return len(sps)
+	return len(sps) - 1
+}
+
+func StartWatch() {
+	go func() {
+		for {
+			fmt.Println("Goroutine:", runtime.NumGoroutine(), " ", "Sockets:", GetSocketsNum(), " ", "Pid", os.Getpid())
+			time.Sleep(time.Second * 3)
+		}
+	}()
 }

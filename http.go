@@ -11,8 +11,8 @@ import (
 )
 
 var defaultHttpConfig = &ProxyConfig{
-	TimeOut: time.Second * 60 * 10,
-	LogFile: "http.log",
+	TCPTimeOut: time.Second * 60,
+	LogFile:    "http.log",
 }
 
 func DefaultHttp() *HttpProxy {
@@ -110,6 +110,19 @@ func parseHttpRequest(reader io.Reader) (httpReqHeader, bool) {
 	return ret, true
 }
 
+func ioCopyWithTimeOut(dst net.Conn, src net.Conn, timeOut time.Duration) error {
+	var buff [10240]byte
+	for {
+		src.SetReadDeadline(time.Now().Add(timeOut))
+		n, err := src.Read(buff[:])
+		if err != nil {
+			return err
+		}
+		dst.Write(buff[:n])
+	}
+	return nil
+}
+
 func (h *HttpProxy) handleTCPListener() {
 	for {
 		c, err := h.t.Accept()
@@ -137,27 +150,23 @@ func (h *HttpProxy) handleTCPListener() {
 					h.logger.WithField("Host", Host).WithError(err).Println("Dial target host failed")
 					return
 				}
-				r.SetReadDeadline(time.Now().Add(h.Config.TimeOut))
-				r.SetDeadline(time.Now().Add(h.Config.TimeOut))
-				c.SetReadDeadline(time.Now().Add(h.Config.TimeOut))
-				c.SetDeadline(time.Now().Add(h.Config.TimeOut))
 
 				//HTTPS Proxy
 				if reqHeader.Method == http.MethodConnect {
 					c.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
 					go func() {
-						io.Copy(r, c)
+						ioCopyWithTimeOut(r, c, h.Config.TCPTimeOut)
 					}()
 					go func() {
-						io.Copy(c, r)
+						ioCopyWithTimeOut(c, r, h.Config.TCPTimeOut)
 					}()
 				} else {
 					r.Write([]byte(reqHeader.Raw))
 					go func() {
-						io.Copy(r, c)
+						ioCopyWithTimeOut(r, c, h.Config.TCPTimeOut)
 					}()
 					go func() {
-						io.Copy(c, r)
+						ioCopyWithTimeOut(c, r, h.Config.TCPTimeOut)
 					}()
 				}
 

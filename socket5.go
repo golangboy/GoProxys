@@ -2,6 +2,7 @@ package GoProxys
 
 import "C"
 import (
+	"bytes"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
 	"io"
@@ -19,8 +20,11 @@ const (
 	CmdUdp
 )
 
+type UDPCallBack func(send bool, sender string, receiver string, data []byte, dataLen int)
+type TCPCallBack func(send bool, sender string, receiver string, data []byte, dataLen int)
+
 var defaultSocket5Config = &ProxyConfig{
-	TimeOut:    time.Second * 30,
+	TCPTimeOut: time.Second * 30,
 	UDPTimeOut: time.Second * 3,
 	LogFile:    "socket5.log",
 }
@@ -40,6 +44,10 @@ type Socket5Proxy struct {
 	m              sync.Mutex
 
 	udpProxyServer *net.UDPConn
+
+	//callback
+	UdpCallBack UDPCallBack
+	TcpCallBack TCPCallBack
 }
 
 func (h *Socket5Proxy) RunSocket5Proxy(addr *net.TCPAddr) {
@@ -90,7 +98,7 @@ func (h *Socket5Proxy) Close() {
 }
 
 type dataHelp struct {
-	Data    [1500]byte
+	Data    *bytes.Buffer
 	DataLen int
 }
 
@@ -107,36 +115,43 @@ type shadowSocket struct {
 
 func (r *shadowSocket) close() {
 	r.DataChan <- dataHelp{
-		Data:    [1500]byte{},
+		Data:    nil,
 		DataLen: 20,
 	}
 	r.Socket.Close()
 }
-func (r *shadowSocket) translateServer() {
-	var buff [40240]byte
+func (r *shadowSocket) translateServer(udpCallBack UDPCallBack) {
+	var buff [65535]byte
 	for {
-		n, err := r.Socket.Read(buff[:])
+		n, addr, err := r.Socket.ReadFromUDP(buff[:])
 		if err != nil {
 
 			break
 		}
 		r.AvailTime = time.Now()
 
+		if udpCallBack != nil {
+			udpCallBack(false, addr.String(), r.LocalClient.String(), buff[:n], n)
+		}
 		r.ProxySocket.WriteToUDP(append(r.Header[:r.HeaderLen], buff[:n]...), &r.LocalClient)
 	}
 }
 
-func (r *shadowSocket) translateClient() {
+func (r *shadowSocket) translateClient(udpCallBack UDPCallBack) {
 	for {
 		tmp := <-r.DataChan
-		switch tmp.Data[3] {
+		if tmp.Data == nil {
+			close(r.DataChan)
+			break
+		}
+		switch tmp.Data.Bytes()[3] {
 		case 1:
 			//ipv4
 			r.HeaderLen = 3 + 1 + 4 + 2
 			break
 		case 3:
 			//domain
-			r.HeaderLen = int(3 + 1 + tmp.Data[4] + 2)
+			r.HeaderLen = int(3 + 1 + tmp.Data.Bytes()[4] + 2)
 			break
 		case 4:
 			//ipv6
@@ -145,10 +160,13 @@ func (r *shadowSocket) translateClient() {
 
 		}
 		for i := 0; i < r.HeaderLen; i++ {
-			r.Header[i] = tmp.Data[i]
+			r.Header[i] = tmp.Data.Bytes()[i]
 		}
 		r.AvailTime = time.Now()
-		_, err := r.Socket.WriteTo(tmp.Data[r.HeaderLen:tmp.DataLen], &r.TargetServer)
+		if udpCallBack != nil {
+			udpCallBack(true, r.LocalClient.String(), r.TargetServer.String(), tmp.Data.Bytes(), tmp.DataLen)
+		}
+		_, err := r.Socket.WriteTo(tmp.Data.Bytes()[r.HeaderLen:tmp.DataLen], &r.TargetServer)
 		if err != nil {
 			close(r.DataChan)
 			break
@@ -158,16 +176,16 @@ func (r *shadowSocket) translateClient() {
 }
 
 func (h *Socket5Proxy) udpTranslate(udpProxy *net.UDPConn) {
-	var buff [1500]byte
+	var buff [65535]byte
 	h.client2SS = make(map[string]*shadowSocket)
 
-	//Debug Watch
+	//Remove unused sockets
 	go func() {
 		for {
 			var closed bool
 			h.m.Lock()
 			for k, v := range h.client2SS {
-				if v.AvailTime.Before(time.Now()) {
+				if v.AvailTime.Add(h.Config.UDPTimeOut).Before(time.Now()) {
 					v.close()
 					delete(h.client2SS, k)
 				}
@@ -177,7 +195,7 @@ func (h *Socket5Proxy) udpTranslate(udpProxy *net.UDPConn) {
 			if closed {
 				break
 			}
-			time.Sleep(h.Config.UDPTimeOut)
+			time.Sleep(time.Second * 1)
 		}
 	}()
 
@@ -186,13 +204,16 @@ func (h *Socket5Proxy) udpTranslate(udpProxy *net.UDPConn) {
 		if err != nil {
 			break
 		}
-		go func(clientAddr *net.UDPAddr, recvLen int, b [1500]byte) {
+
+		newBf := bytes.NewBuffer(nil)
+		io.Copy(newBf, bytes.NewReader(buff[:reqLe]))
+		go func(clientAddr *net.UDPAddr, recvLen int, b *bytes.Buffer) {
 			var host string
 			var port string
 			if err != nil || recvLen < 10 {
-				h.logger.WithField("Raw", b[:reqLe]).Warningln("Udp request")
+				h.logger.WithField("Raw", b.Bytes()[:reqLe]).Warningln("Udp request")
 			}
-			host, port = h.resolveHostPort(b[:recvLen], reqLe)
+			host, port = h.resolveHostPort(b.Bytes()[:recvLen], reqLe)
 			targetServer, err := net.ResolveUDPAddr("udp4", host+":"+port)
 			if err != nil {
 				return
@@ -212,8 +233,8 @@ func (h *Socket5Proxy) udpTranslate(udpProxy *net.UDPConn) {
 					ProxySocket:  udpProxy,
 				}
 				h.client2SS[hashKey] = &newSS
-				go newSS.translateClient()
-				go newSS.translateServer()
+				go newSS.translateClient(h.UdpCallBack)
+				go newSS.translateServer(h.UdpCallBack)
 			}
 			ss = h.client2SS[hashKey]
 			h.m.Unlock()
@@ -223,7 +244,7 @@ func (h *Socket5Proxy) udpTranslate(udpProxy *net.UDPConn) {
 				DataLen: recvLen,
 			}
 
-		}(ClientAddr, reqLe, buff)
+		}(ClientAddr, reqLe, newBf)
 	}
 }
 
@@ -297,13 +318,36 @@ func (h *Socket5Proxy) handleSocketListener() {
 						h.logger.WithField("target", host+":"+port).WithError(err).Warningln("Response target failed")
 						return
 					}
-					server.SetReadDeadline(time.Now().Add(h.Config.TimeOut))
-					server.SetDeadline(time.Now().Add(h.Config.TimeOut))
-					conn.SetReadDeadline(time.Now().Add(h.Config.TimeOut))
-					conn.SetDeadline(time.Now().Add(h.Config.TimeOut))
-
-					go io.Copy(server, conn)
-					go io.Copy(conn, server)
+					go func() {
+						for {
+							var buff [10240]byte
+							conn.SetReadDeadline(time.Now().Add(h.Config.TCPTimeOut))
+							n, err := conn.Read(buff[:])
+							if err != nil {
+								break
+							}
+							if h.TcpCallBack != nil {
+								h.TcpCallBack(true, conn.RemoteAddr().String(), server.RemoteAddr().String(), buff[:n], n)
+							}
+							server.Write(buff[:n])
+						}
+					}()
+					go func() {
+						for {
+							var buff [10240]byte
+							server.SetReadDeadline(time.Now().Add(h.Config.TCPTimeOut))
+							n, err := server.Read(buff[:])
+							if err != nil {
+								break
+							}
+							if h.TcpCallBack != nil {
+								h.TcpCallBack(false, server.RemoteAddr().String(), conn.RemoteAddr().String(), buff[:n], n)
+							}
+							conn.Write(buff[:n])
+						}
+					}()
+					//go io.Copy(server, conn)
+					//go io.Copy(conn, server)
 				} else if cmd == CmdUdp {
 					defer conn.Close()
 					//Response Success
