@@ -129,7 +129,21 @@ func (r *shadowSocket) translateServer() {
 func (r *shadowSocket) translateClient() {
 	for {
 		tmp := <-r.DataChan
-		r.HeaderLen = 10
+		switch tmp.Data[3] {
+		case 1:
+			//ipv4
+			r.HeaderLen = 3 + 1 + 4 + 2
+			break
+		case 3:
+			//domain
+			r.HeaderLen = int(3 + 1 + tmp.Data[4] + 2)
+			break
+		case 4:
+			//ipv6
+			r.HeaderLen = 3 + 1 + 16 + 2
+			break
+
+		}
 		for i := 0; i < r.HeaderLen; i++ {
 			r.Header[i] = tmp.Data[i]
 		}
