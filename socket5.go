@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
+	"golang.org/x/crypto/ssh"
 	"io"
 	"net"
 	"os"
@@ -44,6 +45,9 @@ type Socket5Proxy struct {
 	m              sync.Mutex
 
 	udpProxyServer *net.UDPConn
+
+	//ssh client
+	SSHClient *ssh.Client
 
 	//callback
 	UdpCallBack UDPCallBack
@@ -86,6 +90,10 @@ func (h *Socket5Proxy) Close() {
 
 	if h.logFile != nil {
 		_ = h.logFile.Close()
+	}
+	//SSH Client
+	if h.SSHClient != nil {
+		h.SSHClient.Close()
 	}
 
 	//Close Tcp
@@ -308,7 +316,12 @@ func (h *Socket5Proxy) handleSocketListener() {
 				cmd = b[1]
 				host, port = h.resolveHostPort(b[:n], n)
 				if cmd == CmdConnect {
-					server, err := net.Dial("tcp", net.JoinHostPort(host, port))
+					var server net.Conn
+					if h.SSHClient != nil {
+						server, err = h.SSHClient.Dial("tcp", net.JoinHostPort(host, port))
+					} else {
+						server, err = net.Dial("tcp", net.JoinHostPort(host, port))
+					}
 					if err != nil {
 						h.logger.WithField("target", host+":"+port).WithError(err).Warningln("Dial target failed")
 						return
