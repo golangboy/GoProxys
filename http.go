@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+type HttpCallBack func(send bool, data []byte) []byte
+
 var defaultHttpConfig = &ProxyConfig{
 	TCPTimeOut: time.Second * 60,
 	LogFile:    "http.log",
@@ -26,6 +28,8 @@ type HttpProxy struct {
 	t       *net.TCPListener
 	logFile *os.File
 	logger  *logrus.Logger
+
+	HttpCallBack HttpCallBack
 }
 
 // Start a http/s Proxy Server
@@ -79,8 +83,14 @@ func parseHttpRequest(reader io.Reader) (httpReqHeader, bool) {
 	ret.Method = method
 	ret.Raw = ret.Raw + ret.Method + " "
 
-	ret.Raw = ret.Raw + " "
 	u, ok := readStringUntil(reader, " ")
+	if len(u) >= 7 {
+		u = u[7:]
+		pos := strings.Index(u, "/")
+		if pos != -1 {
+			u = u[pos:]
+		}
+	}
 	if !ok {
 		reader.Read(buff[:])
 		ret.Raw = ret.Raw + string(buff[:])
@@ -110,7 +120,7 @@ func parseHttpRequest(reader io.Reader) (httpReqHeader, bool) {
 	return ret, true
 }
 
-func ioCopyWithTimeOut(dst net.Conn, src net.Conn, timeOut time.Duration) error {
+func ioCopyWithTimeOut(dst net.Conn, src net.Conn, timeOut time.Duration, f func(data []byte) []byte) error {
 	var buff [10240]byte
 	for {
 		src.SetReadDeadline(time.Now().Add(timeOut))
@@ -118,7 +128,12 @@ func ioCopyWithTimeOut(dst net.Conn, src net.Conn, timeOut time.Duration) error 
 		if err != nil {
 			return err
 		}
-		dst.Write(buff[:n])
+		if f != nil {
+			ret := f(buff[:n])
+			dst.Write(ret)
+		} else {
+			dst.Write(buff[:n])
+		}
 	}
 	return nil
 }
@@ -155,18 +170,32 @@ func (h *HttpProxy) handleTCPListener() {
 				if reqHeader.Method == http.MethodConnect {
 					c.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
 					go func() {
-						ioCopyWithTimeOut(r, c, h.Config.TCPTimeOut)
+						ioCopyWithTimeOut(r, c, h.Config.TCPTimeOut, nil)
 					}()
 					go func() {
-						ioCopyWithTimeOut(c, r, h.Config.TCPTimeOut)
+						ioCopyWithTimeOut(c, r, h.Config.TCPTimeOut, nil)
 					}()
 				} else {
 					r.Write([]byte(reqHeader.Raw))
 					go func() {
-						ioCopyWithTimeOut(r, c, h.Config.TCPTimeOut)
+
+						//Recv From Client
+						ioCopyWithTimeOut(r, c, h.Config.TCPTimeOut, func(data []byte) []byte {
+							if h.HttpCallBack != nil {
+								return h.HttpCallBack(true, data)
+							}
+							return data
+						})
 					}()
 					go func() {
-						ioCopyWithTimeOut(c, r, h.Config.TCPTimeOut)
+
+						//Recv From Server
+						ioCopyWithTimeOut(c, r, h.Config.TCPTimeOut, func(data []byte) []byte {
+							if h.HttpCallBack != nil {
+								return h.HttpCallBack(false, data)
+							}
+							return data
+						})
 					}()
 				}
 
