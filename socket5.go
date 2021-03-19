@@ -1,6 +1,5 @@
 package GoProxys
 
-import "C"
 import (
 	"bytes"
 	"github.com/sirupsen/logrus"
