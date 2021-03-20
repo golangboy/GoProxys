@@ -22,6 +22,7 @@ const (
 
 type UDPCallBack func(send bool, sender string, receiver string, data []byte, dataLen int)
 type TCPCallBack func(send bool, sender string, receiver string, data []byte, dataLen int)
+type TCPConnect func(conn net.Conn, host string, port string)
 
 var defaultSocket5Config = &ProxyConfig{
 	TCPTimeOut: time.Second * 30,
@@ -51,6 +52,7 @@ type Socket5Proxy struct {
 	//callback
 	UdpCallBack UDPCallBack
 	TcpCallBack TCPCallBack
+	TcpConnect  TCPConnect
 }
 
 func (h *Socket5Proxy) RunSocket5Proxy(addr *net.TCPAddr) {
@@ -316,6 +318,13 @@ func (h *Socket5Proxy) handleSocketListener() {
 				host, port = h.resolveHostPort(b[:n], n)
 				if cmd == CmdConnect {
 					var server net.Conn
+
+					if h.TcpConnect != nil {
+						conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+						h.TcpConnect(conn, host, port)
+						return
+					}
+
 					if h.SSHClient != nil {
 						server, err = h.SSHClient.Dial("tcp", net.JoinHostPort(host, port))
 					} else {
