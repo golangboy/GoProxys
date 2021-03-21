@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -68,7 +69,7 @@ type httpReqHeader struct {
 	Version string
 	Headers []string
 	Raw     string
-	Body    string
+	Body    []byte
 }
 
 func parseHttpRequest(reader io.Reader) (httpReqHeader, bool) {
@@ -84,7 +85,9 @@ func parseHttpRequest(reader io.Reader) (httpReqHeader, bool) {
 	ret.Raw = ret.Raw + ret.Method + " "
 
 	u, ok := readStringUntil(reader, " ")
-	if len(u) >= 7 {
+
+	//http://xxx.xxx/abc -> /abc
+	if len(u) >= 7 && u[:4] == "http" {
 		u = u[7:]
 		pos := strings.Index(u, "/")
 		if pos != -1 {
@@ -106,6 +109,7 @@ func parseHttpRequest(reader io.Reader) (httpReqHeader, bool) {
 	}
 	ret.Raw = ret.Raw + v + "\r\n"
 	ret.Version = v
+	var needRead int
 	for {
 		head, ok := readStringUntil(reader, "\r\n")
 		ret.Raw = ret.Raw + head + "\r\n"
@@ -115,7 +119,30 @@ func parseHttpRequest(reader io.Reader) (httpReqHeader, bool) {
 		if len(head) == 0 {
 			break
 		}
+		if strings.ToLower(getHttpKey(head)) == "content-length" {
+			tmp := getHttpValue(head)
+			needRead, _ = strconv.Atoi(tmp)
+		}
 		ret.Headers = append(ret.Headers, head)
+	}
+	for {
+		var buff [1024]byte
+		var n int
+		var err error
+		if needRead > 1024 {
+			n, err = reader.Read(buff[:])
+			needRead = needRead - 1024
+		} else {
+			n, err = reader.Read(buff[:needRead])
+			needRead = needRead - n
+		}
+		if err != nil {
+			break
+		}
+		ret.Body = append(ret.Body, buff[:n]...)
+		if needRead == 0 {
+			break
+		}
 	}
 	return ret, true
 }
