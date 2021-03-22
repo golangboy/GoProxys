@@ -125,7 +125,7 @@ func parseHttpRequest(reader io.Reader) (httpReqHeader, bool) {
 		}
 		ret.Headers = append(ret.Headers, head)
 	}
-	for {
+	for needRead > 0 {
 		var buff [1024]byte
 		var n int
 		var err error
