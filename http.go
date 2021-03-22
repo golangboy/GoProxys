@@ -12,7 +12,7 @@ import (
 )
 
 type HttpCallBack func(send bool, data []byte) []byte
-
+type HttpConnect func(conn net.Conn, host string, port string)
 var defaultHttpConfig = &ProxyConfig{
 	TCPTimeOut: time.Second * 60,
 	LogFile:    "http.log",
@@ -31,6 +31,7 @@ type HttpProxy struct {
 	logger  *logrus.Logger
 
 	HttpCallBack HttpCallBack
+	HttpConnect  HttpConnect
 }
 
 // Start a http/s Proxy Server
@@ -184,6 +185,16 @@ func (h *HttpProxy) handleTCPListener() {
 							Host = Host + ":80"
 						}
 						break
+					}
+				}
+				if h.HttpConnect != nil {
+					pos := strings.Index(Host, ":")
+					targetAddr := Host[:pos]
+					targetPort := Host[pos+1:]
+					if reqHeader.Method == http.MethodConnect {
+						c.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+						h.HttpConnect(c, targetAddr, targetPort)
+						return
 					}
 				}
 				tcpAddr, _ := net.ResolveTCPAddr("tcp4", Host)
