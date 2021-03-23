@@ -1,6 +1,7 @@
 package GoProxys
 
 import (
+	"fmt"
 	"github.com/sirupsen/logrus"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 type HttpCallBack func(send bool, data []byte) []byte
 type HttpConnect func(conn net.Conn, host string, port string)
+
 var defaultHttpConfig = &ProxyConfig{
 	TCPTimeOut: time.Second * 60,
 	LogFile:    "http.log",
@@ -169,7 +171,7 @@ func ioCopyWithTimeOut(dst net.Conn, src net.Conn, timeOut time.Duration, f func
 func (h *HttpProxy) handleTCPListener() {
 	for {
 		c, err := h.t.Accept()
-		if err == nil {
+		if err == nil && c != nil {
 			go func(c net.Conn) {
 				reqHeader, ok := parseHttpRequest(c)
 				if !ok {
@@ -189,6 +191,11 @@ func (h *HttpProxy) handleTCPListener() {
 				}
 				if h.HttpConnect != nil {
 					pos := strings.Index(Host, ":")
+					if pos == -1 {
+						fmt.Println(Host)
+						c.Close()
+						return
+					}
 					targetAddr := Host[:pos]
 					targetPort := Host[pos+1:]
 					if reqHeader.Method == http.MethodConnect {
