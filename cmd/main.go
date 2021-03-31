@@ -16,6 +16,7 @@ func main() {
 			go io.Copy(conn, c)
 			io.Copy(c, conn)
 			c.Close()
+			conn.Close()
 		}
 	}
 	s.RunSocket5Proxy(b)

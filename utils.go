@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -55,6 +56,38 @@ func newUdp() *net.UDPConn {
 	a, _ := net.ResolveUDPAddr("udp", ":")
 	c, _ := net.ListenUDP("udp", a)
 	return c
+}
+
+var foreignAddr string
+
+func IsTargetLocal(host string) bool {
+	type Foo struct {
+		Cid   string `json:"cid"`
+		Cip   string `json:"cip"`
+		Cname string `json:"cname"`
+	}
+	if host == "127.0.0.1" || host == "localhost" {
+		return true
+	}
+	addr, _ := net.InterfaceAddrs()
+	for _, v := range addr {
+		if strings.Index(v.String(), host) >= 0 {
+			return true
+		}
+	}
+
+	if len(foreignAddr) == 0 {
+		resp, _ := http.Get("http://ipinfo.io/ip")
+		if resp != nil {
+			bs, err := io.ReadAll(resp.Body)
+			fmt.Println(err)
+			defer resp.Body.Close()
+			str := string(bs)
+			foreignAddr = str
+			fmt.Println(foreignAddr)
+		}
+	}
+	return foreignAddr == host
 }
 
 func GetSocketsNum() int {

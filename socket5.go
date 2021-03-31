@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -316,6 +317,15 @@ func (h *Socket5Proxy) handleSocketListener() {
 				var cmd byte
 				cmd = b[1]
 				host, port = h.resolveHostPort(b[:n], n)
+				if IsTargetLocal(host) {
+					pos := strings.Index(h.tcpProxyServer.Addr().String(), ":")
+					dstPort := port
+					localPort := h.tcpProxyServer.Addr().String()[pos+1:]
+					if dstPort == localPort {
+						conn.Close()
+						return
+					}
+				}
 				if cmd == CmdConnect {
 					var server net.Conn
 
@@ -345,6 +355,8 @@ func (h *Socket5Proxy) handleSocketListener() {
 							conn.SetReadDeadline(time.Now().Add(h.Config.TCPTimeOut))
 							n, err := conn.Read(buff[:])
 							if err != nil {
+								conn.Close()
+								server.Close()
 								break
 							}
 							if h.TcpCallBack != nil {
@@ -359,6 +371,8 @@ func (h *Socket5Proxy) handleSocketListener() {
 							server.SetReadDeadline(time.Now().Add(h.Config.TCPTimeOut))
 							n, err := server.Read(buff[:])
 							if err != nil {
+								conn.Close()
+								server.Close()
 								break
 							}
 							if h.TcpCallBack != nil {

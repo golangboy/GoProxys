@@ -156,6 +156,8 @@ func ioCopyWithTimeOut(dst net.Conn, src net.Conn, timeOut time.Duration, f func
 		src.SetReadDeadline(time.Now().Add(timeOut))
 		n, err := src.Read(buff[:])
 		if err != nil {
+			dst.Close()
+			src.Close()
 			return err
 		}
 		if f != nil {
@@ -189,6 +191,20 @@ func (h *HttpProxy) handleTCPListener() {
 						break
 					}
 				}
+				tcpAddr, _ := net.ResolveTCPAddr("tcp4", Host)
+				if tcpAddr == nil {
+					c.Close()
+					return
+				}
+				if IsTargetLocal(tcpAddr.IP.String()) {
+					pos := strings.Index(h.t.Addr().String(), ":")
+					dstPort := strconv.Itoa(tcpAddr.Port)
+					localPort := h.t.Addr().String()[pos+1:]
+					if dstPort == localPort {
+						c.Close()
+						return
+					}
+				}
 				if h.HttpConnect != nil {
 					pos := strings.Index(Host, ":")
 					if pos == -1 {
@@ -204,7 +220,6 @@ func (h *HttpProxy) handleTCPListener() {
 						return
 					}
 				}
-				tcpAddr, _ := net.ResolveTCPAddr("tcp4", Host)
 				r, err := net.DialTCP("tcp4", nil, tcpAddr)
 				if err != nil {
 					h.logger.WithField("Host", Host).WithError(err).Println("Dial target host failed")
