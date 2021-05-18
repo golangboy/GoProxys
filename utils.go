@@ -77,7 +77,7 @@ func IsTargetLocal(host string) bool {
 	}
 
 	if len(foreignAddr) == 0 {
-		resp, _ := http.Get("http://ipinfo.io/ip")
+		resp, _ := http.Get("http://whatismyip.akamai.com/")
 		if resp != nil {
 			bs, err := io.ReadAll(resp.Body)
 			fmt.Println(err)
