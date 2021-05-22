@@ -103,6 +103,12 @@ func GetSocketsNum() int {
 	bbs, _ := ioutil.ReadAll(m)
 	ret := string(bbs)
 	sps := strings.Split(ret, cast.ToString(os.Getpid()))
+	if z != nil {
+		z.Wait()
+	}
+	if m != nil {
+		m.Close()
+	}
 	return len(sps) - 1
 }
 
